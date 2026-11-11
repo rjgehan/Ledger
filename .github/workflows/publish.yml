@@ -1,7 +1,8 @@
 name: Build and publish image
 
 # Every push to main runs the tests and publishes ghcr.io/<owner>/creditreport.
-# Watchtower on the CasaOS box pulls it within five minutes.
+# Watchtower on the CasaOS box pulls it within five minutes. The image keeps that
+# name even though the repository is now called ledger, so the server needs no change.
 on:
   push:
     branches: [main]
@@ -13,7 +14,7 @@ concurrency:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository }}
+  IMAGE_NAME: ${{ github.repository_owner }}/creditreport
 
 jobs:
   test:

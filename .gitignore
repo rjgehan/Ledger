@@ -23,3 +23,6 @@ secret.key
 .env
 .env.*
 !.env.example
+
+# Rendered brag videos and their captured frames.
+brag-output*/
