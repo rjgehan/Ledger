@@ -59,6 +59,34 @@ public class Settings {
         });
     }
 
+    static final String RECURRING_NAMES = "recurring-names";
+
+    /** Names you gave regular charges the history found, by their key ("USAA FEDERAL" is your loan to your parents). */
+    public java.util.Map<String, String> recurringNames() {
+        java.util.Map<String, String> names = new java.util.LinkedHashMap<>();
+        repo.findById(RECURRING_NAMES).ifPresent(s -> {
+            for (String line : s.getValue().split("\n")) {
+                int tab = line.indexOf('\t');
+                if (tab > 0) {
+                    names.put(line.substring(0, tab), line.substring(tab + 1));
+                }
+            }
+        });
+        return names;
+    }
+
+    public void setRecurringNames(java.util.Map<String, String> names) {
+        tx.executeWithoutResult(s -> {
+            if (names.isEmpty()) {
+                repo.deleteById(RECURRING_NAMES);
+                return;
+            }
+            AppSetting setting = repo.findById(RECURRING_NAMES).orElseGet(() -> new AppSetting(RECURRING_NAMES, ""));
+            setting.setValue(String.join("\n", names.entrySet().stream().map(e -> e.getKey() + "\t" + e.getValue()).toList()));
+            repo.save(setting);
+        });
+    }
+
     static final String SHORTCUT_TOKEN = "shortcut-token-sha256";
 
     /** SHA-256 of the iPhone shortcut's token, or null if none was ever made. */

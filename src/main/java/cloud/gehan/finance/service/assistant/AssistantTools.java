@@ -595,7 +595,8 @@ public class AssistantTools {
         java.util.Set<String> kept = new java.util.HashSet<>();
         accounts.findByHiddenFalse().stream().filter(a -> KEPT_ACCOUNTS.contains(a.getType()))
                 .forEach(a -> kept.add(a.getName()));
-        r.put("payers", o.detected().stream().filter(d -> !d.accountHidden() && !kept.contains(d.accountName())
+        // Pay is income wherever it lands; only untracked deposits into savings stay out (they could be transfers).
+        r.put("payers", o.detected().stream().filter(d -> !d.accountHidden() && (d.tracked() || !kept.contains(d.accountName()))
                         && !interestName(d.pattern()) && !interestName(d.example()))
                 .map(d -> new Payer(d.pattern(), d.frequency(), d.count(), usd(d.averageCents()),
                         usd(d.monthlyEstimateCents()), d.lastDate(), d.nextExpected(), d.tracked())).toList());

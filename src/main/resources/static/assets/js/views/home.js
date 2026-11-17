@@ -1,15 +1,10 @@
-// Home answers one question at a glance: am I OK right now?
-// Net worth and its direction, what's free to spend for the rest of the month,
-// which targets are tight, then goals. Tapping a card opens what manages it.
+// Home answers one question at a glance: am I OK right now? One number, what's free to spend
+// after bills and saving, with one line of status under it. Everything else is a tap away:
+// whether this month's saving has moved, the emergency fund, and only the problems.
 
 import { get, post } from '../api.js';
 import { h, toast, busy, icon } from '../ui.js';
-import { money, pct, monthLabel, ago, shortDate, privacy, parseDay, depositLine, filedLine } from '../fmt.js';
-import { meter } from '../charts.js';
-import { forecastCard } from './forecast.js';
-import { insightCard } from './insights.js';
-
-const MAX_TARGETS = 6;
+import { money, pct, shortDate, parseDay, privacy, depositLine, filedLine } from '../fmt.js';
 
 export async function render(params, app) {
   const [d, f, claude] = await Promise.all([get('/api/summary'), get('/api/forecast'),
@@ -21,152 +16,115 @@ export async function render(params, app) {
       h('a', { class: 'btn primary', href: '#/accounts' }, 'Add accounts'));
   }
 
-  // With no income on record the month card can't say much, so help find the paycheck first.
+  // With no income on record the number can't say much, so help find the paycheck first.
   const setup = d.plan.incomeCents === 0 ? await incomeSetup(app) : null;
-  const left = h('div', { class: 'home-col' }, netWorth(d), setup, insightCard(claude, app),
-    f.status === 'unknown' ? null : forecastCard(f), dueCards(d));
-  const right = h('div', { class: 'home-col' }, targets(d), goals(d));
-  return h('div', { class: 'grid two' }, left, right);
+  const m = model(d, f, claude);
+  return h('div', { class: 'home' }, setup, hero(m), links(m));
 }
 
-// --- Net worth ------------------------------------------------------------------
+// --- What Home reads ------------------------------------------------------------------
 
-function netWorthChange(d) {
-  if (d.netWorthChangePercent === null || d.netWorthChangePercent === undefined) return '—';
-  const p = d.netWorthChangePercent;
-  return (p >= 0 ? '+' : '−') + Math.abs(p).toFixed(1) + '%';
-}
+const VERDICT = {
+  ok: ['good', 'On track'], tight: ['warn', 'A little tight'], under: ['warn', 'Saving less this month'],
+  short: ['bad', 'Short this month'], unknown: ['', 'Pay not known yet'],
+};
 
-function netWorth(d) {
-  let change = null;
-  if (d.netWorthChangeCents !== null) {
-    const up = d.netWorthChangeCents >= 0;
-    const percent = d.netWorthChangePercent === null ? null
-      : (up ? '+' : '−') + Math.abs(d.netWorthChangePercent).toFixed(1) + '%';
-    const amount = privacy.on ? null : money(d.netWorthChangeCents, { sign: true });
-    // Hidden, the big figure already is the change, so this line just says over what.
-    change = h('div', { class: 'nw-change ' + (up ? 'up' : 'down') },
-      privacy.on ? '' : [amount, percent].filter(Boolean).join(' · '),
-      h('span', { class: 'quiet' }, privacy.on ? `change over the past ${d.netWorthChangeDays ?? 30} days` : ` past ${d.netWorthChangeDays ?? 30} days`));
-  }
-  return h('a', { class: 'card nw', href: '#/accounts', 'aria-label': 'Net worth, open accounts' },
-    h('div', { class: 'nw-top' }, h('span', { class: 'label' }, 'Net worth'), syncStatus(d)),
-    h('div', { class: 'nw-main' },
-      h('span', { class: 'nw-figure' }, privacy.on ? netWorthChange(d) : money(d.netWorthCents)),
-      sparkline(d.netWorthSpark, (d.netWorthChangeCents ?? 0) >= 0)),
-    change);
-}
-
-/** Up or down at a glance: no axes, no labels, just the shape of the last month. */
-function sparkline(points, up) {
-  if (!points || points.length < 2) return null;
-  const w = 96;
-  const ht = 30;
-  const values = points.map((p) => p.cents);
-  const lo = Math.min(...values);
-  const hi = Math.max(...values);
-  const span = hi - lo || 1;
-  const x = (i) => 2 + (i / (points.length - 1)) * (w - 6);
-  const y = (v) => 3 + (1 - (v - lo) / span) * (ht - 6);
-  const line = values.map((v, i) => `${i ? 'L' : 'M'}${x(i).toFixed(1)},${y(v).toFixed(1)}`).join(' ');
-  const color = up ? 'var(--good-ink)' : 'var(--critical)';
-  const last = values.length - 1;
-  return h('svg', { class: 'spark', viewBox: `0 0 ${w} ${ht}`, width: w, height: ht, 'aria-hidden': 'true' },
-    h('path', { d: `${line} L${x(last)},${ht} L${x(0)},${ht} Z`, fill: color, 'fill-opacity': 0.1 }),
-    h('path', { d: line, fill: 'none', stroke: color, 'stroke-width': 1.75, 'stroke-linejoin': 'round', 'stroke-linecap': 'round' }),
-    h('circle', { cx: x(last), cy: y(values[last]), r: 2.5, fill: color }));
-}
-
-const PROBLEM = {
-  NEEDS_REAUTH: () => 'sign in again',
-  ERROR: (p) => (p.error && p.error.length <= 48 ? p.error.toLowerCase() : 'sync failed'),
-  WARNING: () => 'a bank needs attention',
+const BANK = {
+  NEEDS_REAUTH: () => 'needs you to sign in again',
+  ERROR: () => 'sync failed',
+  WARNING: () => 'needs attention',
   BEHIND: (p) => `nothing new since ${shortDate(p.since)}`,
 };
 
-function syncStatus(d) {
-  // A bank can stop updating while syncs still succeed; that matters more than "synced 2 h ago".
-  if (d.problems.length === 1) {
-    const p = d.problems[0];
-    return h('a', { class: 'status bad', href: '#/accounts' }, `${p.name}: ${(PROBLEM[p.status] || PROBLEM.ERROR)(p)}`);
-  }
-  if (d.problems.length > 1) {
-    return h('a', { class: 'status bad', href: '#/accounts' }, `${d.problems.length} bank problems`);
-  }
-  if (!d.lastSyncedAt) return h('span', { class: 'status' });
-  const hours = (Date.now() - new Date(d.lastSyncedAt).getTime()) / 3600000;
-  return h('span', { class: 'status' + (hours > 36 ? ' stale' : '') }, `Synced ${ago(d.lastSyncedAt)}`);
-}
-
-// --- Cards due soon (only when one is) ------------------------------------------
-
-function dueCards(d) {
+function model(d, f, claude) {
   const today = new Date(); today.setHours(0, 0, 0, 0);
-  const soon = d.cards.filter((c) => {
-    if (!c.dueDate) return false;
-    const days = Math.round((parseDay(c.dueDate) - today) / 86400000);
+  const days = (iso) => Math.round((parseDay(iso) - today) / 86400000);
+
+  const s = d.saving;
+  const target = s.targetCents ?? f.savingsTargetCents ?? 0;
+  const saving = { moved: s.movedCents, target, next: s.next, done: target > 0 && s.movedCents >= target };
+
+  const goal = d.targets.goals.find((g) => g.type === 'BALANCE' && /emergency/i.test(g.name))
+    || d.targets.goals.find((g) => g.type === 'BALANCE');
+
+  // Problems only, worst first: a bank that stopped, targets over, card bills this week, then
+  // targets close to their limit and charges Claude flagged.
+  const problems = [];
+  for (const p of d.problems) {
+    problems.push({ tone: 'bad', text: `${p.name} ${(BANK[p.status] || BANK.ERROR)(p)}`, href: '#/accounts' });
+  }
+  const spending = [...d.targets.spending].sort((a, b) => b.fraction - a.fraction);
+  const inCategory = (t) => `#/activity?category=${t.categoryId}&month=${d.month}&from=targets`;
+  for (const t of spending.filter((x) => x.status === 'over')) {
+    problems.push({ tone: 'bad', text: `${t.name}: ${money(t.spentCents - t.limitCents)} over`, href: inCategory(t) });
+  }
+  for (const c of d.cards) {
     const owed = c.statementBalanceCents ?? -c.balanceCents;
-    return days >= 0 && days <= 7 && owed > 0;
-  }).slice(0, 2);
-  if (!soon.length) return null;
-  return h('section', { class: 'card flush' }, soon.map((c) =>
-    h('a', { class: 'due-row', href: '#/accounts' },
-      h('span', { class: 'text' }, `${c.institution ? c.institution + ' ' : ''}${c.name} due ${shortDate(c.dueDate)}`),
-      // The statement's amount due is a bill; without one, it's the card's balance, which stays hidden.
-      h('span', { class: 'amt' }, money(c.statementBalanceCents ?? -c.balanceCents, { secret: c.statementBalanceCents == null })))));
+    if (!c.dueDate || owed <= 0) continue;
+    const n = days(c.dueDate);
+    if (n < 0 || n > 7) continue;
+    const when = n === 0 ? 'today' : n === 1 ? 'tomorrow' : shortDate(c.dueDate);
+    // The statement's amount due is a bill; without one, it's the card's balance, which stays hidden.
+    problems.push({ tone: 'warn', text: `${c.name} due ${when}`, amount: money(owed, { secret: c.statementBalanceCents == null }), href: '#/accounts' });
+  }
+  for (const t of spending.filter((x) => x.status === 'watch')) {
+    problems.push({ tone: 'warn', text: `${t.name}: ${money(t.limitCents - t.spentCents)} left`, href: inCategory(t) });
+  }
+  for (const i of (claude?.items || []).filter((x) => x.kind === 'CHARGE')) {
+    problems.push({ tone: 'warn', text: `${i.description}: ${i.reason}`, href: '#/insights' });
+  }
+
+  return {
+    free: { cents: f.freeCents, perDay: f.perDayCents, daysLeft: f.daysLeft, status: f.status,
+      verdict: VERDICT[f.status] || VERDICT.unknown },
+    saving, goal, problems,
+  };
 }
 
-// --- Spending targets -----------------------------------------------------------
+// --- The number -------------------------------------------------------------------------
 
-const RANK = { over: 0, watch: 1, ok: 2 };
-
-function targets(d) {
-  const all = [...d.targets.spending].sort((a, b) => (RANK[a.status] - RANK[b.status]) || (b.fraction - a.fraction));
-  if (!all.length) {
-    return h('a', { class: 'card tcard-empty', href: '#/targets' }, 'Set spending targets');
-  }
-  const shown = all.slice(0, MAX_TARGETS);
-  const card = h('section', { class: 'card flush tcard' },
-    h('a', { class: 'tcard-head', href: '#/targets' },
-      h('h2', null, 'Spending targets', all.length > MAX_TARGETS ? h('span', { class: 'more' }, ` · ${shown.length} of ${all.length}`) : null),
-      h('span', { class: 'col' }, 'Left')));
-  for (const s of shown) {
-    const left = s.limitCents - s.spentCents;
-    // The whole box opens the targets screen; each category's transactions are a tap away there.
-    card.append(h('a', { class: 'trow', href: '#/targets' },
-      h('span', { class: 'name' }, s.name),
-      meter(s.fraction, s.status, s.expectedFraction, 'sm'),
-      h('span', { class: 'amt' + (left < 0 ? ' down' : '') }, money(left))));
-  }
-  return card;
+function hero(m) {
+  // The month's verdict and the daily pace; problems are counted on their own row below.
+  const days = m.free.daysLeft;
+  const status = m.free.status === 'unknown' || days <= 0 ? m.free.verdict[1]
+    : `${m.free.verdict[1]} · about ${money(m.free.perDay)} a day for ${days} day${days === 1 ? '' : 's'}`;
+  return h('a', { class: 'home-hero', href: '#/month', 'aria-label': 'Free to spend, open This month' },
+    h('div', { class: 'home-num' }, money(m.free.cents)),
+    h('div', { class: 'home-label' }, 'free to spend this month'),
+    h('div', { class: 'home-status ' + m.free.verdict[0] }, status));
 }
 
-// --- Goals ------------------------------------------------------------------------
+// --- One tap away -----------------------------------------------------------------------
 
-function goals(d) {
-  const list = d.targets.goals;
-  if (!list.length) return h('a', { class: 'card tcard-empty', href: '#/goals' }, 'Set a savings goal');
-  const card = h('section', { class: 'card flush', style: { paddingBottom: '4px' } },
-    h('a', { class: 'tcard-head', href: '#/goals' }, h('h2', null, 'Goals')));
-  for (const g of list) {
-    let value;
-    if (g.type === 'SAVINGS_RATE') {
-      value = `${g.currentPercent === null ? '—' : g.currentPercent.toFixed(0) + '%'} of ${g.targetPercent}%`;
-    } else if (g.type === 'BALANCE' && privacy.on) {
-      // A balance goal's progress is an account balance: only how far along, while balances are hidden.
-      value = pct(Math.min(g.fraction, 1));
-    } else {
-      value = `${money(g.currentCents)} of ${money(g.targetCents)}`;
-    }
-    const valEl = h('span', { class: 'val' });
-    if (g.status === 'done') valEl.append(h('span', { class: 'done' }, 'Done'));
-    else {
-      valEl.append(value);
-      if (g.status === 'behind') valEl.append(' · ', h('span', { class: 'behind' }, 'behind'));
-    }
-    card.append(h('a', { class: 'grow-row', href: '#/goals' },
-      h('div', { class: 'line' }, h('span', { class: 'name' }, g.name), valEl),
-      meter(g.fraction, g.status === 'behind' ? 'behind' : 'savings', null, 'xs')));
+function links(m) {
+  const s = m.saving;
+  const savingMeta = s.done ? 'Done for this month'
+    : s.next ? `Next ${money(s.next.cents)} on ${shortDate(s.next.day)}` : null;
+  const card = h('section', { class: 'card flush home-links' },
+    h('a', { class: 'home-row', href: '#/targets' },
+      h('span', { class: 'home-name' }, 'Saving', savingMeta ? h('span', { class: 'home-meta' }, savingMeta) : null),
+      h('span', { class: 'home-val' + (s.done ? ' good' : '') }, s.target ? `${money(s.moved)} of ${money(s.target)}` : money(s.moved)),
+      icon('chevron', 16)));
+  const g = m.goal;
+  if (g) {
+    // A balance goal's progress is an account balance: only how far along, while balances are hidden.
+    const value = g.status === 'done' ? 'Done' : privacy.on ? pct(Math.min(g.fraction, 1)) : `${money(g.currentCents)} of ${money(g.targetCents)}`;
+    card.append(h('a', { class: 'home-row', href: '#/goals' },
+      h('span', { class: 'home-name' }, g.name, g.status === 'behind' ? h('span', { class: 'home-meta warn' }, 'Behind') : null),
+      h('span', { class: 'home-val' }, value), icon('chevron', 16)));
+  } else {
+    card.append(h('a', { class: 'home-row', href: '#/goals' }, h('span', { class: 'home-name' }, 'Set an emergency fund goal'), icon('chevron', 16)));
+  }
+  if (m.problems.length) {
+    // The problems open in place, so the one number stays the only thing on screen until asked.
+    card.append(h('details', { class: 'home-more' },
+      h('summary', { class: 'home-row' }, h('span', { class: 'home-name' }, 'Needs a look'),
+        h('span', { class: 'home-count ' + m.problems[0].tone }, String(m.problems.length)), icon('chevron', 16)),
+      m.problems.map((p) => h('a', { class: 'home-row problem', href: p.href },
+        h('span', { class: 'home-dot ' + p.tone }),
+        h('span', { class: 'home-name' }, p.text),
+        p.amount ? h('span', { class: 'home-val' }, p.amount) : null,
+        icon('chevron', 16)))));
   }
   return card;
 }

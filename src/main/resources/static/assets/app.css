@@ -699,3 +699,38 @@ a.status { text-decoration: none; }
 .claude-row .what { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .claude-row .amt { font-variant-numeric: tabular-nums; }
 .claude-row.total { font-weight: 600; border-bottom: 0; }
+
+/* --- Home: one number, the rest a tap away ------------------------------------------ */
+
+.home { display: grid; gap: 12px; max-width: 720px; }
+.home-hero { display: block; text-align: center; padding: 36px 16px 30px; color: inherit; }
+.home-num { font-size: 76px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; font-variant-numeric: tabular-nums; }
+.home-label { margin-top: 10px; font-size: 17px; color: var(--ink-2); }
+.home-status { margin-top: 14px; display: inline-block; font-size: 15px; font-weight: 600; padding: 6px 12px; border-radius: 999px;
+  background: var(--surface); border: 1px solid var(--hairline); }
+.home-status.good { color: var(--good-ink); }
+.home-status.warn { color: var(--warning-ink); }
+.home-status.bad { color: var(--critical); }
+.home-row { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px 8px 16px; border-top: 1px solid var(--hairline); color: inherit; }
+.home-links > .home-row:first-child { border-top: 0; }
+.home-row > svg { color: var(--ink-3); flex: none; }
+.home-name { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.home-meta { font-size: 13px; color: var(--ink-3); }
+.home-meta.warn { color: var(--warning-ink); }
+.home-val { color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.home-val.good { color: var(--good-ink); }
+.home-count { min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; display: grid; place-items: center;
+  font-size: 13px; font-weight: 600; color: #fff; background: var(--critical); }
+.home-count.warn { background: var(--warning); color: #3d2a00; }
+.home-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--ink-3); }
+.home-dot.bad { background: var(--critical); }
+.home-dot.warn { background: var(--warning); }
+.home-more > summary { list-style: none; cursor: pointer; }
+.home-more > summary::-webkit-details-marker { display: none; }
+.home-more > summary > svg { transition: transform .15s; }
+.home-more[open] > summary > svg { transform: rotate(90deg); }
+.home-row.problem { padding-left: 28px; }
+.home-row.problem .home-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+.rename-row { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
+.rename-row .field { flex: 1; }

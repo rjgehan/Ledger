@@ -11,6 +11,7 @@ import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.NavigableMap;
+import java.util.TreeMap;
 
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -18,11 +19,14 @@ import org.springframework.transaction.annotation.Transactional;
 import cloud.gehan.finance.config.AppProperties;
 import cloud.gehan.finance.model.Account;
 import cloud.gehan.finance.model.AccountType;
+import cloud.gehan.finance.model.CategoryKind;
 import cloud.gehan.finance.model.Connection;
 import cloud.gehan.finance.model.ConnectionStatus;
 import cloud.gehan.finance.model.ProviderType;
+import cloud.gehan.finance.model.Transaction;
 import cloud.gehan.finance.repo.AccountRepository;
 import cloud.gehan.finance.repo.ConnectionRepository;
+import cloud.gehan.finance.repo.TransactionRepository;
 
 /** Everything the Home screen shows, in one request; Accounts reads the net worth history from it too. */
 @Service
@@ -40,10 +44,12 @@ public class SummaryService {
     private final NetWorthService netWorth;
     private final Budget budget;
     private final Freshness freshness;
+    private final TransactionRepository txns;
     private final ZoneId zone;
 
     public SummaryService(AccountRepository accounts, ConnectionRepository connections, FlowService flow,
-            TargetService targets, NetWorthService netWorth, Budget budget, Freshness freshness, AppProperties props) {
+            TargetService targets, NetWorthService netWorth, Budget budget, Freshness freshness,
+            TransactionRepository txns, AppProperties props) {
         this.accounts = accounts;
         this.connections = connections;
         this.flow = flow;
@@ -51,6 +57,7 @@ public class SummaryService {
         this.netWorth = netWorth;
         this.budget = budget;
         this.freshness = freshness;
+        this.txns = txns;
         this.zone = props.zoneId();
     }
 
@@ -74,7 +81,24 @@ public class SummaryService {
             List<Point> netWorthHistory, List<Point> netWorthSpark, Long netWorthChangeCents,
             Double netWorthChangePercent, Integer netWorthChangeDays, Budget.MonthPlan plan,
             TargetService.Progress targets, List<Card> cards,
-            Instant lastSyncedAt, List<Freshness.Problem> problems, boolean hasAccounts) {
+            Instant lastSyncedAt, List<Freshness.Problem> problems, boolean hasAccounts, Saving saving) {
+    }
+
+    /** Money moved to savings or investing on one day. */
+    public record Move(LocalDate day, long cents) {
+    }
+
+    /**
+     * Whether this month's saving has happened yet.
+     *
+     * @param movedCents moved to savings and investing so far this month: what left a checking, card or savings
+     *        account filed as Savings or Investing (pay can land in a savings account and leave from there)
+     * @param targetCents the monthly savings target, if one is set
+     * @param moves this month's moves, by day
+     * @param next the next move a regular pattern suggests (the same day of the month in at least two
+     *        recent months), or null when there isn't one yet
+     */
+    public record Saving(long movedCents, Long targetCents, List<Move> moves, Move next) {
     }
 
     public Home home(YearMonth month) {
@@ -144,9 +168,70 @@ public class SummaryService {
             }
         }
         List<Freshness.Problem> problems = freshness.problems();
+        Budget.MonthPlan plan = budget.plan(month, b);
 
         return new Home(month.toString(), assets - liabilities, assets, liabilities, groupList, history, spark,
-                change, changePct, changeDays, budget.plan(month, b), targets.progress(month), cards, lastSynced, problems,
-                !visible.isEmpty());
+                change, changePct, changeDays, plan, targets.progress(month), cards, lastSynced, problems,
+                !visible.isEmpty(), saving(month, b, plan.savingsTargetCents(), today));
+    }
+
+    Saving saving(YearMonth month, FlowService.Breakdown b, Long targetCents, LocalDate today) {
+        LocalDate first = month.atDay(1);
+        NavigableMap<LocalDate, Long> recent = moves(first.minusMonths(4), month.atEndOfMonth());
+        List<Move> thisMonth = recent.subMap(first, true, month.atEndOfMonth(), true).entrySet().stream()
+                .map(e -> new Move(e.getKey(), e.getValue())).toList();
+        Move next = month.equals(YearMonth.from(today)) ? nextMove(recent, today) : null;
+        return new Saving(thisMonth.stream().mapToLong(Move::cents).sum(), targetCents, thisMonth, next);
+    }
+
+    /** This month's saving for one month, for Claude's notes and reviews. */
+    public Saving saving(YearMonth month) {
+        FlowService.Breakdown b = flow.month(month);
+        return saving(month, b, budget.plan(month, b).savingsTargetCents(), LocalDate.now(zone));
+    }
+
+    /** Each day's total that left a visible checking, card or savings account filed in a savings-kind category. */
+    private NavigableMap<LocalDate, Long> moves(LocalDate from, LocalDate to) {
+        NavigableMap<LocalDate, Long> byDay = new TreeMap<>();
+        for (Transaction t : txns.findVisibleBetween(from, to)) {
+            if (t.getAmountCents() < 0 && t.getCategory() != null && t.getCategory().getKind() == CategoryKind.SAVINGS
+                    && t.getAccount().getType() != AccountType.BROKERAGE && t.getAccount().getType() != AccountType.RETIREMENT) {
+                byDay.merge(t.getDay(), -t.getAmountCents(), Long::sum);
+            }
+        }
+        return byDay;
+    }
+
+    /**
+     * The next regular move: a day of the month with a move in at least two of the recent months
+     * (within two days either way, for weekends), next due after today and not already made this
+     * month. Its amount is the most recent one on that day.
+     */
+    static Move nextMove(NavigableMap<LocalDate, Long> recent, LocalDate today) {
+        Move best = null;
+        for (LocalDate day : recent.keySet()) {
+            int dom = day.getDayOfMonth();
+            long months = recent.keySet().stream()
+                    .filter(d -> Math.abs(d.getDayOfMonth() - dom) <= 2)
+                    .map(YearMonth::from).distinct().count();
+            if (months < 2) {
+                continue;
+            }
+            for (int k = 0; k <= 1; k++) {
+                YearMonth m = YearMonth.from(today).plusMonths(k);
+                LocalDate due = m.atDay(Math.min(dom, m.lengthOfMonth()));
+                boolean made = recent.keySet().stream().anyMatch(d -> Math.abs(ChronoUnit.DAYS.between(d, due)) <= 2);
+                if (due.isAfter(today) && !made) {
+                    long cents = recent.entrySet().stream()
+                            .filter(e -> Math.abs(e.getKey().getDayOfMonth() - dom) <= 2)
+                            .reduce((x, y) -> y).map(Map.Entry::getValue).orElse(0L);
+                    if (best == null || due.isBefore(best.day())) {
+                        best = new Move(due, cents);
+                    }
+                    break;
+                }
+            }
+        }
+        return best;
     }
 }

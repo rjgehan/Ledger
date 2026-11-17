@@ -46,6 +46,16 @@ public class RecurringController {
         return Map.of("ok", true);
     }
 
+    public record RenameBody(@NotBlank String key, String name) {
+    }
+
+    /** Call a regular charge something you recognise ("Loan to parents"); blank goes back to the bank's name. */
+    @PostMapping("/rename")
+    public Map<String, Object> rename(@RequestBody @Valid RenameBody body) {
+        recurring.rename(body.key(), body.name());
+        return Map.of("ok", true);
+    }
+
     @DeleteMapping("/hide")
     @ResponseStatus(HttpStatus.NO_CONTENT)
     public void showHidden() {

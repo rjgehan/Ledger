@@ -96,9 +96,15 @@ public class PaycheckService {
         }
         List<MonthPay> byMonth = new ArrayList<>();
         months.forEach((m, v) -> byMonth.add(new MonthPay(m.toString(), v[0], (int) v[1])));
-        // Average over complete months only; the current one is still filling in.
-        long avg = (long) byMonth.subList(0, byMonth.size() - 1).stream()
-                .filter(m -> m.count() > 0).mapToLong(MonthPay::totalCents).average().orElse(0);
+        // Average over complete months only: not the current one, still filling in, and not the month bank
+        // history starts in partway, which holds only some of that month's pay.
+        YearMonth firstFull = txns.earliestDay()
+                .map(d -> d.getDayOfMonth() <= 3 ? YearMonth.from(d) : YearMonth.from(d).plusMonths(1))
+                .orElse(YearMonth.of(1, 1));
+        java.util.function.Predicate<MonthPay> full = m -> !YearMonth.parse(m.month()).isBefore(firstFull);
+        List<MonthPay> complete = byMonth.subList(0, byMonth.size() - 1).stream().filter(m -> m.count() > 0).toList();
+        List<MonthPay> counted = complete.stream().anyMatch(full) ? complete.stream().filter(full).toList() : complete;
+        long avg = (long) counted.stream().mapToLong(MonthPay::totalCents).average().orElse(0);
         return new Overview(detected, byMonth, avg);
     }
 

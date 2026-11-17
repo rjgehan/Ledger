@@ -88,6 +88,8 @@ public class Insights {
     private final CategoryRuleRepository rules;
     private final TransactionRepository txns;
     private final cloud.gehan.finance.service.Freshness freshness;
+    private final cloud.gehan.finance.service.SummaryService summary;
+    private final cloud.gehan.finance.service.TargetService targets;
     private final TransactionTemplate tx;
     private final ObjectMapper json;
     private final ZoneId zone;
@@ -97,8 +99,9 @@ public class Insights {
 
     public Insights(ClaudeCode claude, AssistantTools tools, ShortcutCategorizer leftovers, InsightRepository insights,
             InsightItemRepository items, CategoryRepository categories, CategoryRuleRepository rules,
-            TransactionRepository txns, cloud.gehan.finance.service.Freshness freshness, TransactionTemplate tx,
-            ObjectMapper json, AppProperties props) {
+            TransactionRepository txns, cloud.gehan.finance.service.Freshness freshness,
+            cloud.gehan.finance.service.SummaryService summary, cloud.gehan.finance.service.TargetService targets,
+            TransactionTemplate tx, ObjectMapper json, AppProperties props) {
         this.claude = claude;
         this.tools = tools;
         this.leftovers = leftovers;
@@ -108,6 +111,8 @@ public class Insights {
         this.rules = rules;
         this.txns = txns;
         this.freshness = freshness;
+        this.summary = summary;
+        this.targets = targets;
         this.tx = tx;
         this.json = json;
         this.zone = props.zoneId();
@@ -170,6 +175,7 @@ public class Insights {
         data.put("categories", tx.execute(s -> leftovers.choices().stream().map(Category::getName).toList()));
         // Names and dates only: a bank that stopped updating makes the month look lighter than it is.
         data.put("accounts_behind", accountsBehind());
+        data.put("plan", plan(YearMonth.from(today)));
         data.put("flagged_before", items.findByKind(InsightItem.Kind.CHARGE).stream()
                 .map(InsightItem::getTransactionId).toList());
         // Every purchase of the last months, so a one-time buy can be told from a habit (and the
@@ -188,7 +194,9 @@ public class Insights {
                 + "- notes: up to 3 short lines on what stands out, with numbers: a category well above usual (beer "
                 + "and bars, say), a big one-off, a bill still due. Leave out anything unremarkable. If accounts_behind "
                 + "isn't empty, those accounts haven't updated, so recent spending is missing: say so in one note, and "
-                + "don't read low spending as on track.\n"
+                + "don't read low spending as on track. When it matters (after a move to savings, or late in the month "
+                + "with the target not yet met), one note can say how this month's saving stands from plan: "
+                + "moved_to_savings against monthly_savings_target, and next_regular_move.\n"
                 + "- odd_charges: recent transactions worth a second look: the same charge twice, a subscription or "
                 + "bill that went up, a free trial that turned paid, a charge much bigger than usual for that "
                 + "merchant. Use ids from recent_transactions and leave out ids in flagged_before. Usually empty.\n"
@@ -206,7 +214,8 @@ public class Insights {
                 + "months. Leave out rows already marked oneOff and ids in one_off_suggested_before. Ids from "
                 + "spending_history; reason is a few words, e.g. \"A mattress, bought every few years\". Usually empty.\n"
                 + (recap ? "- week_recap: it's Sunday. Up to 3 short lines on this week (since " + shortDay(weekStart)
-                        + "): what was up or down against usual, and one thing to watch.\n" : "")
+                        + "): what was up or down against usual, whether this month's saving is on its way (plan), and "
+                        + "one thing to watch.\n" : "")
                 + "\nData:\n" + write(data);
 
         Map<String, Object> props = new LinkedHashMap<>();
@@ -250,17 +259,54 @@ public class Insights {
         file(a.path("file"));
     }
 
+    /**
+     * Their saving plan: the monthly target, what has moved this month and the next regular move, and their
+     * goals' amounts and dates. Not a goal's progress: with its target amount, that would give the balance away.
+     */
+    Map<String, Object> plan(YearMonth month) {
+        return tx.execute(s -> {
+            cloud.gehan.finance.service.SummaryService.Saving saving = summary.saving(month);
+            Map<String, Object> p = new LinkedHashMap<>();
+            p.put("monthly_savings_target", saving.targetCents() == null ? null : dollars(saving.targetCents()));
+            p.put("moved_to_savings", dollars(saving.movedCents()));
+            p.put("moves", saving.moves().stream().map(mv -> Map.of("day", mv.day().toString(), "amount", dollars(mv.cents())))
+                    .toList());
+            if (saving.next() != null) {
+                p.put("next_regular_move", Map.of("day", saving.next().day().toString(), "amount", dollars(saving.next().cents())));
+            }
+            List<Map<String, Object>> goals = new ArrayList<>();
+            for (cloud.gehan.finance.service.TargetService.GoalProgress g : targets.progress(month).goals()) {
+                Map<String, Object> goal = new LinkedHashMap<>();
+                goal.put("name", g.name());
+                goal.put("target", g.targetCents() == null ? null : dollars(g.targetCents()));
+                goal.put("by", g.targetDate() == null ? null : g.targetDate().toString());
+                goal.put("status", g.status());
+                goals.add(goal);
+            }
+            p.put("goals", goals);
+            p.put("notes", "moved_to_savings is what left their accounts for savings or investing this month. Goals "
+                    + "show the amount, date and whether they're on pace, never how much is saved so far.");
+            return p;
+        });
+    }
+
+    private static java.math.BigDecimal dollars(long cents) {
+        return java.math.BigDecimal.valueOf(cents, 2);
+    }
+
     void monthly(YearMonth m) {
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("months", look("monthly_summary", "{\"from_month\":\"" + m.minusMonths(5) + "\",\"to_month\":\"" + m + "\"}"));
         data.put("targets_and_goals", look("spending_targets_and_goals", "{\"month\":\"" + m + "\"}"));
+        data.put("plan", plan(m));
         data.put("monthly_expenses", look("monthly_expenses", "{}"));
         data.put("spending_categories", tx.execute(s -> categories.findAllByOrderBySortOrderAscNameAsc().stream()
                 .filter(c -> c.getKind() == CategoryKind.EXPENSE).map(Category::getName).toList()));
         String month = m.atDay(1).format(DateTimeFormatter.ofPattern("MMMM yyyy", Locale.US));
         String ask = "Write the review of " + month + ", the last month in months:\n"
                 + "- review: up to 4 short lines on how it went against the months before it: income, spending, what "
-                + "changed and why, one-offs. If it isn't a full month of history, say so in one line.\n"
+                + "changed and why, one-offs, and whether the month's saving met the target in plan. If it isn't a "
+                + "full month of history, say so in one line.\n"
                 + "- targets: up to 4 spending targets to change or add, where the current monthly limit (or the lack "
                 + "of one) doesn't fit how they actually spend: category exactly as in spending_categories, "
                 + "monthly_limit in whole dollars, reason in one short sentence. Empty if the targets fit.\n"

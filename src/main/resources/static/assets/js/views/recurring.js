@@ -80,13 +80,21 @@ function detailSheet(i, refresh) {
       fact('Next', i.nextDate ? shortDate(i.nextDate) : 'Not seen lately'),
       fact('Category', i.categoryName || 'None'),
       fact('Seen', `${i.count} times`));
+    // Your own name for it ("Loan to parents" instead of the bank's "Usaa Federal Savings Bank").
+    const name = h('input', { class: 'field', value: i.name, maxlength: 60, 'aria-label': 'Name', enterkeyhint: 'done' });
+    const rename = h('button', { class: 'btn small', type: 'button' }, 'Rename');
+    rename.addEventListener('click', busy(rename, async () => {
+      if (name.value.trim() === i.name) return;
+      await post('/api/recurring/rename', { key: i.key, name: name.value.trim() });
+      s.close(); toast(name.value.trim() ? 'Renamed' : 'Back to the bank name'); refresh();
+    }));
     const hide = h('button', { class: 'btn danger' }, 'Not recurring');
     hide.addEventListener('click', busy(hide, async () => {
       if (!(await confirmSheet(`Take ${i.name} off the list?`, 'It stays in Activity; it just won\'t count as a regular charge.', 'Take it off'))) return;
       await post('/api/recurring/hide', { key: i.key });
       s.close(); toast('Taken off'); refresh();
     }));
-    body.append(facts, h('div', { class: 'btn-row' },
+    body.append(h('div', { class: 'rename-row' }, name, rename), facts, h('div', { class: 'btn-row' },
       h('a', { class: 'btn', href: '#/activity?q=' + encodeURIComponent(i.search), onclick: () => s.close() }, 'See charges'),
       hide));
   });

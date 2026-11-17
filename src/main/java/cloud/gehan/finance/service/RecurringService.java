@@ -83,6 +83,7 @@ public class RecurringService {
     public Overview overview() {
         LocalDate today = LocalDate.now(zone);
         Set<String> hidden = settings.hiddenRecurring();
+        java.util.Map<String, String> names = settings.recurringNames();
         List<RecurringCharge> mine = charges.findAll();
         List<Item> active = new ArrayList<>();
         List<Item> stopped = new ArrayList<>();
@@ -90,7 +91,13 @@ public class RecurringService {
             if (hidden.contains(f.item().key()) || mine.stream().anyMatch(c -> same(c, f.item()))) {
                 continue;
             }
-            (f.active() ? active : stopped).add(f.item());
+            Item i = f.item();
+            if (names.containsKey(i.key())) {
+                i = new Item(i.key(), i.chargeId(), names.get(i.key()), i.kind(), i.cadence(), i.amountCents(),
+                        i.monthlyCents(), i.lastDate(), i.nextDate(), i.expected(), i.categoryName(), i.accountName(),
+                        i.logo(), i.search(), i.count());
+            }
+            (f.active() ? active : stopped).add(i);
         }
         for (RecurringCharge c : mine) {
             LocalDate next = nextOnOrAfter(c.getNextDate(), c.getCadence(), today);
@@ -398,6 +405,17 @@ public class RecurringService {
     }
 
     @Transactional
+    /** Your name for a regular charge the history found; blank goes back to the bank's. */
+    public void rename(String key, String name) {
+        java.util.Map<String, String> names = settings.recurringNames();
+        if (name == null || name.isBlank()) {
+            names.remove(key);
+        } else {
+            names.put(key, name.strip().replaceAll("[\\t\\n]", " "));
+        }
+        settings.setRecurringNames(names);
+    }
+
     public void showHidden() {
         settings.setHiddenRecurring(Set.of());
     }
