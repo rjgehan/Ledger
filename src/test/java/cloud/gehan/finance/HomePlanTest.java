@@ -91,7 +91,52 @@ class HomePlanTest {
                 .doesNotContain("Loan to parents");
     }
 
+    @Test
+    void homeSaysWhyATargetIsOver() throws Exception {
+        long card = account("Card", "CREDIT_CARD");
+        LocalDate first = LocalDate.now().withDayOfMonth(1);
+        long dining = categoryId("Dining");
+        call(org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put("/api/targets/" + dining),
+                "{\"monthlyLimitCents\":10000}");
+        // One dinner was most of it: that's the reason given, with its note.
+        patchNote(patchCategoryAndGet(txn(card, first, -8000, "TST* LA BOUCHERIE").get("id").asLong(), "Dining"), "Birthday dinner");
+        patchCategory(txn(card, first, -3000, "SLICE PIZZA").get("id").asLong(), "Dining");
+        patchCategory(txn(card, first, -2000, "SLICE PIZZA").get("id").asLong(), "Dining");
+
+        JsonNode why = null;
+        for (JsonNode w : call(get("/api/summary"), null).get("spending").get("why")) {
+            if (w.get("categoryId").asLong() == dining) {
+                why = w;
+            }
+        }
+        assertThat(why).as("Dining is over its target, so Home says why").isNotNull();
+        assertThat(why.get("spentCents").asLong()).isEqualTo(13000);
+        assertThat(why.get("limitCents").asLong()).isEqualTo(10000);
+        assertThat(why.get("driver").asText()).isEqualTo("one");
+        assertThat(why.get("label").asText()).isEqualTo("Birthday dinner");
+        assertThat(why.get("driverCents").asLong()).isEqualTo(8000);
+        assertThat(why.get("count").asInt()).isEqualTo(3);
+    }
+
     // --- helpers ---------------------------------------------------------------------
+
+    private long categoryId(String name) throws Exception {
+        for (JsonNode c : call(get("/api/categories"), null)) {
+            if (name.equals(c.get("name").asText())) {
+                return c.get("id").asLong();
+            }
+        }
+        throw new AssertionError("no category " + name);
+    }
+
+    private long patchCategoryAndGet(long txnId, String category) throws Exception {
+        patchCategory(txnId, category);
+        return txnId;
+    }
+
+    private void patchNote(long txnId, String note) throws Exception {
+        call(patch("/api/transactions/" + txnId), "{\"notes\":\"" + note + "\"}");
+    }
 
     private long account(String name, String type) throws Exception {
         return call(post("/api/accounts"), String.format("{\"name\":\"%s\",\"type\":\"%s\",\"balanceCents\":0}", name, type))

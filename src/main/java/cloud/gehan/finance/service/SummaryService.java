@@ -81,7 +81,28 @@ public class SummaryService {
             List<Point> netWorthHistory, List<Point> netWorthSpark, Long netWorthChangeCents,
             Double netWorthChangePercent, Integer netWorthChangeDays, Budget.MonthPlan plan,
             TargetService.Progress targets, List<Card> cards,
-            Instant lastSyncedAt, List<Freshness.Problem> problems, boolean hasAccounts, Saving saving) {
+            Instant lastSyncedAt, List<Freshness.Problem> problems, boolean hasAccounts, Saving saving, Spending spending) {
+    }
+
+    /** A category's spending this month; lastDay is its latest charge, for fixed costs ("Paid Nov 2"). */
+    public record Line(Long categoryId, String name, long cents, LocalDate lastDay) {
+    }
+
+    /**
+     * What drove a category's spending, for "why it's tight": one charge that was most of it, else the
+     * place it went most often, else just how many charges.
+     *
+     * @param driver one, place or count
+     */
+    public record Why(Long categoryId, String name, long spentCents, Long limitCents, int count, String driver,
+            String label, long driverCents, LocalDate day, int visits) {
+    }
+
+    /**
+     * Where this month's money went: fixed costs paid (rent, loans), everyday spending by category, one-offs
+     * left out, and why: each category over its target, plus the biggest untargeted one when it's large.
+     */
+    public record Spending(List<Line> fixed, List<Line> everyday, long oneOffCents, List<Why> why) {
     }
 
     /** Money moved to savings or investing on one day. */
@@ -169,10 +190,74 @@ public class SummaryService {
         }
         List<Freshness.Problem> problems = freshness.problems();
         Budget.MonthPlan plan = budget.plan(month, b);
+        TargetService.Progress targetsProgress = targets.progress(month);
 
         return new Home(month.toString(), assets - liabilities, assets, liabilities, groupList, history, spark,
-                change, changePct, changeDays, plan, targets.progress(month), cards, lastSynced, problems,
-                !visible.isEmpty(), saving(month, b, plan.savingsTargetCents(), today));
+                change, changePct, changeDays, plan, targetsProgress, cards, lastSynced, problems,
+                !visible.isEmpty(), saving(month, b, plan.savingsTargetCents(), today),
+                spending(month, b, targetsProgress));
+    }
+
+    /** The biggest untargeted category counts as a reason once it's this share of everyday spending. */
+    static final double BIG_SHARE = 0.15;
+    static final long BIG_MIN_CENTS = 5000;
+
+    Spending spending(YearMonth month, FlowService.Breakdown b, TargetService.Progress progress) {
+        Map<Long, List<Transaction>> byCategory = new LinkedHashMap<>();
+        for (Transaction t : txns.findVisibleBetween(month.atDay(1), month.atEndOfMonth())) {
+            if (t.getAmountCents() < 0 && !t.isOneOff() && t.getCategory() != null
+                    && t.getCategory().getKind() == CategoryKind.EXPENSE) {
+                byCategory.computeIfAbsent(t.getCategory().getId(), k -> new ArrayList<>()).add(t);
+            }
+        }
+        List<Line> fixed = new ArrayList<>();
+        List<Line> everyday = new ArrayList<>();
+        b.expenses().forEach((bucket, cents) -> {
+            if (cents <= 0) {
+                return;
+            }
+            List<Transaction> list = byCategory.getOrDefault(bucket.categoryId(), List.of());
+            LocalDate last = list.stream().map(Transaction::getDay).max(Comparator.naturalOrder()).orElse(null);
+            (bucket.fixed() ? fixed : everyday).add(new Line(bucket.categoryId(), bucket.name(), cents, last));
+        });
+        everyday.sort(Comparator.comparingLong(Line::cents).reversed());
+
+        List<Why> why = new ArrayList<>();
+        java.util.Set<Long> targeted = new java.util.HashSet<>();
+        progress.spending().stream()
+                .peek(t -> targeted.add(t.categoryId()))
+                .filter(t -> "over".equals(t.status()))
+                .sorted(Comparator.comparingLong((TargetService.SpendingProgress t) -> t.spentCents() - t.limitCents()).reversed())
+                .forEach(t -> why.add(why(t.categoryId(), t.name(), t.spentCents(), t.limitCents(),
+                        byCategory.getOrDefault(t.categoryId(), List.of()))));
+        long everydayTotal = everyday.stream().mapToLong(Line::cents).sum();
+        everyday.stream().filter(l -> !targeted.contains(l.categoryId())).findFirst()
+                .filter(l -> l.cents() >= BIG_MIN_CENTS && l.cents() >= everydayTotal * BIG_SHARE)
+                .ifPresent(l -> why.add(why(l.categoryId(), l.name(), l.cents(), null,
+                        byCategory.getOrDefault(l.categoryId(), List.of()))));
+        return new Spending(fixed, everyday, b.oneOffCents(), why);
+    }
+
+    /** One charge that was at least half of it; else the place it went most (twice or more); else the count. */
+    static Why why(Long categoryId, String name, long spent, Long limit, List<Transaction> list) {
+        int count = list.size();
+        Transaction top = list.stream().min(Comparator.comparingLong(Transaction::getAmountCents)).orElse(null);
+        if (top != null && -top.getAmountCents() * 2 >= spent) {
+            String label = top.getNotes() != null && !top.getNotes().isBlank() ? top.getNotes().strip()
+                    : RecurringService.display(top, top.getDescription());
+            return new Why(categoryId, name, spent, limit, count, "one", label, -top.getAmountCents(), top.getDay(), 1);
+        }
+        Map<String, List<Transaction>> places = new LinkedHashMap<>();
+        for (Transaction t : list) {
+            places.computeIfAbsent(RecurringService.key(t), k -> new ArrayList<>()).add(t);
+        }
+        return places.values().stream()
+                .filter(v -> v.size() >= 2)
+                .max(Comparator.comparingLong(v -> v.stream().mapToLong(t -> -t.getAmountCents()).sum()))
+                .map(v -> new Why(categoryId, name, spent, limit, count, "place",
+                        RecurringService.display(v.get(0), v.get(0).getDescription()),
+                        v.stream().mapToLong(t -> -t.getAmountCents()).sum(), null, v.size()))
+                .orElse(new Why(categoryId, name, spent, limit, count, "count", null, 0, null, 0));
     }
 
     Saving saving(YearMonth month, FlowService.Breakdown b, Long targetCents, LocalDate today) {

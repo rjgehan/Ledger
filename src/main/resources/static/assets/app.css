@@ -700,37 +700,52 @@ a.status { text-decoration: none; }
 .claude-row .amt { font-variant-numeric: tabular-nums; }
 .claude-row.total { font-weight: 600; border-bottom: 0; }
 
-/* --- Home: one number, the rest a tap away ------------------------------------------ */
+/* --- Home: left to spend, where the pay goes, and why ------------------------------- */
 
 .home { display: grid; gap: 12px; max-width: 720px; }
-.home-hero { display: block; text-align: center; padding: 36px 16px 30px; color: inherit; }
-.home-num { font-size: 76px; font-weight: 700; letter-spacing: -0.04em; line-height: 1; font-variant-numeric: tabular-nums; }
-.home-label { margin-top: 10px; font-size: 17px; color: var(--ink-2); }
-.home-status { margin-top: 14px; display: inline-block; font-size: 15px; font-weight: 600; padding: 6px 12px; border-radius: 999px;
-  background: var(--surface); border: 1px solid var(--hairline); }
-.home-status.good { color: var(--good-ink); }
-.home-status.warn { color: var(--warning-ink); }
-.home-status.bad { color: var(--critical); }
-.home-row { display: flex; align-items: center; gap: 10px; min-height: 52px; padding: 8px 12px 8px 16px; border-top: 1px solid var(--hairline); color: inherit; }
-.home-links > .home-row:first-child { border-top: 0; }
+.home-hero { display: block; text-align: center; padding: 22px 12px 18px; color: inherit; }
+.home-label { font-size: 15px; color: var(--ink-2); font-weight: 500; }
+.home-num { font-size: 72px; font-weight: 700; letter-spacing: -0.04em; line-height: 1.05; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.home-num.short { color: var(--critical); }
+.home-sub { font-size: 16px; color: var(--ink-2); margin: 6px 0 12px; }
+.home-card { color: inherit; }
+.home-head { display: flex; align-items: baseline; justify-content: space-between; padding: 14px 16px 10px; color: inherit; }
+.home-head h2 { margin: 0; font-size: 13px; font-weight: 600; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.04em; }
+.home-col { font-size: 13px; color: var(--ink-3); }
+.home-bar { display: flex; gap: 2px; height: 14px; margin: 0 16px 8px; border-radius: 7px; overflow: hidden; }
+.home-bar span { min-width: 3px; }
+.k-fixed { background: #6b7f99; }
+.k-due { background: var(--tax); }
+.k-saving { background: var(--savings); }
+.k-spent { background: var(--expense); }
+.k-left { background: var(--income); }
+.home-line, .home-row { display: flex; align-items: center; gap: 10px; min-height: 50px; padding: 6px 12px 6px 16px; border-top: 1px solid var(--hairline); color: inherit; }
+.home-card > .home-row:first-child { border-top: 0; }
 .home-row > svg { color: var(--ink-3); flex: none; }
-.home-name { flex: 1; min-width: 0; display: grid; gap: 2px; }
-.home-meta { font-size: 13px; color: var(--ink-3); }
-.home-meta.warn { color: var(--warning-ink); }
-.home-val { color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
-.home-val.good { color: var(--good-ink); }
-.home-count { min-width: 22px; height: 22px; padding: 0 7px; border-radius: 11px; display: grid; place-items: center;
-  font-size: 13px; font-weight: 600; color: #fff; background: var(--critical); }
-.home-count.warn { background: var(--warning); color: #3d2a00; }
+.home-line { padding-right: 16px; }
+.home-line.total { font-weight: 700; }
+.home-line.total .home-amt { color: var(--income); font-size: 17px; }
+.home-line.total.short .home-amt { color: var(--critical); }
+.home-key { width: 10px; height: 10px; border-radius: 3px; flex: none; }
+.home-name { flex: 1; min-width: 0; display: grid; gap: 1px; font-weight: 500; }
+.home-meta { font-size: 13px; color: var(--ink-3); font-weight: 400; }
+.home-amt { font-variant-numeric: tabular-nums; font-weight: 600; white-space: nowrap; }
+.home-amt.down { color: var(--critical); }
+.home-amt.warn { color: var(--warning-ink); }
+.home-split { display: grid; gap: 2px; padding: 0 16px 8px 36px; margin-top: -4px; }
+.home-split a { display: flex; justify-content: space-between; padding: 2px 0; font-size: 14px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+.home-split a.muted { color: var(--ink-3); }
 .home-dot { width: 8px; height: 8px; border-radius: 50%; flex: none; background: var(--ink-3); }
 .home-dot.bad { background: var(--critical); }
 .home-dot.warn { background: var(--warning); }
-.home-more > summary { list-style: none; cursor: pointer; }
-.home-more > summary::-webkit-details-marker { display: none; }
-.home-more > summary > svg { transition: transform .15s; }
-.home-more[open] > summary > svg { transform: rotate(90deg); }
-.home-row.problem { padding-left: 28px; }
-.home-row.problem .home-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-why { display: flex; gap: 12px; align-items: baseline; padding: 11px 16px; border-top: 1px solid var(--hairline); font-size: 15px; line-height: 1.4; color: var(--ink-2); }
+.home-why b { color: var(--ink); font-weight: 600; }
+.home-why .home-dot { transform: translateY(-1px); }
+.home-head + .home-why, .home-head + .home-cat { border-top: 0; }
+.home-head + .home-why { padding-top: 2px; }
+.home-cat { display: grid; grid-template-columns: minmax(0, 7.5em) 1fr auto; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid var(--hairline); color: inherit; }
+.home-cat .home-name { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.home-cat .home-amt { text-align: right; min-width: 3.5em; }
 
 .rename-row { display: flex; gap: 8px; align-items: center; margin-bottom: 14px; }
 .rename-row .field { flex: 1; }
